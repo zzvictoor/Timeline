@@ -1,111 +1,119 @@
-from Timeline.Server.Constants import TIMELINE_LOGGER, LOGIN_SERVER, WORLD_SERVER
-from Timeline.Utils.Events import Event, PacketEventHandler, GeneralEvent
-from Timeline.Database.DB import Penguin
+"""Chat and optional Perspective API moderation handlers."""
 
-from twisted.internet.defer import inlineCallbacks, returnValue
-
-from collections import deque
 import logging
-from time import time
+import os
+
+from Timeline.Database.DB import Penguin
+from Timeline.Server.Constants import LOGIN_SERVER, TIMELINE_LOGGER, WORLD_SERVER
+from Timeline.Utils.Events import GeneralEvent, PacketEventHandler
 
 logger = logging.getLogger(TIMELINE_LOGGER)
 
-'''
-AS2 and AS3 Compatible
-'''
-@PacketEventHandler.XTPacketRule('s', 'u#sma', WORLD_SERVER)
-@PacketEventHandler.XTPacketRule_AS2('s', 'u#sma', WORLD_SERVER)
+
+@PacketEventHandler.XTPacketRule("s", "u#sma", WORLD_SERVER)
+@PacketEventHandler.XTPacketRule_AS2("s", "u#sma", WORLD_SERVER)
 def SendMascotMessageRule(data):
     return [[int(data[2][0])], {}]
 
-'''
-AS2 and AS3 Compatible
-'''
-@PacketEventHandler.onXT('s', 'u#sma', WORLD_SERVER)
-@PacketEventHandler.onXT_AS2('s', 'u#sma', WORLD_SERVER)
-def handleSendMessage(client, _id):
-    client['room'].send('sma', client['id'], _id) if client['mascot_mode'] else None
 
-'''
-AS2 and AS3 Compatible
-'''
-@PacketEventHandler.XTPacketRule('s', 'm#sm', WORLD_SERVER)
-@PacketEventHandler.XTPacketRule_AS2('s', 'm#sm', WORLD_SERVER)
+@PacketEventHandler.onXT("s", "u#sma", WORLD_SERVER)
+@PacketEventHandler.onXT_AS2("s", "u#sma", WORLD_SERVER)
+def handleSendMascotMessage(client, message_id):
+    if client["mascot_mode"]:
+        client["room"].send("sma", client["id"], message_id)
+
+
+@PacketEventHandler.XTPacketRule("s", "m#sm", WORLD_SERVER)
+@PacketEventHandler.XTPacketRule_AS2("s", "m#sm", WORLD_SERVER)
 def SendMessageRule(data):
     return [[int(data[2][0]), str(data[2][1])], {}]
 
-'''
-AS2 and AS3 Compatible
-'''
-@PacketEventHandler.onXT('s', 'm#sm', WORLD_SERVER)
-@PacketEventHandler.onXT_AS2('s', 'm#sm', WORLD_SERVER)
-def handleSendMessage(client, _id, message):
-    if not client['id'] == _id:
+
+@PacketEventHandler.onXT("s", "m#sm", WORLD_SERVER)
+@PacketEventHandler.onXT_AS2("s", "m#sm", WORLD_SERVER)
+def handleSendMessage(client, penguin_id, message):
+    if client["id"] != penguin_id:
         return
 
-    message = message.strip(' ').replace('|', '\\|')
+    message = message.strip().replace("|", "\\|")
+    GeneralEvent.call("before-message", client, message)
 
-    GeneralEvent.call('before-message', client, message)
-
-    if client['muted']:
-        GeneralEvent.call('after-message-muted', client, message)
+    if client["muted"]:
+        GeneralEvent.call("after-message-muted", client, message)
         return
-
-    if client['stealth_mode'] or client['mascot_mode']:
+    if client["stealth_mode"] or client["mascot_mode"]:
         return
 
     toxic = Toxicity(message)
     if toxic > 60:
-        # wow toxic...
         if toxic > 90:
-            # he's a racist, ban him
-            GeneralEvent('ban-player', client, 0, 'Rude. Toxicity [{}] message: {}'.format(toxic, message), type=3, ban_type=610)
+            GeneralEvent(
+                "ban-player",
+                client,
+                0,
+                "Rude. Toxicity [{}] message: {}".format(toxic, message),
+                type=3,
+                ban_type=610,
+            )
         elif toxic > 80:
-            # Kick'em 
-            GeneralEvent('kick-player', client, 'Rude. Toxicity [{}] message: {}'.format(toxic, message))
+            GeneralEvent(
+                "kick-player",
+                client,
+                "Rude. Toxicity [{}] message: {}".format(toxic, message),
+            )
         else:
-            GeneralEvent('mute-player', client, 'Rude. Toxicity [{}] message: {}'.format(toxic, message))
-
+            GeneralEvent(
+                "mute-player",
+                client,
+                "Rude. Toxicity [{}] message: {}".format(toxic, message),
+            )
         return
 
+    client["room"].send("sm", penguin_id, message)
+    GeneralEvent.call("after-message", client, message)
 
-    client['room'].send('sm', _id, message)
 
-    GeneralEvent.call('after-message', client, message)
-
-'''
-Uses Google' Perspective API to check Toxicity of a text.
-Visit: https://github.com/conversationai/perspectiveapi/blob/master/quickstart.md
-and get your Perspective API key.
-'''
-PERSPECTIVE_API_KEY = 'AIzaSyD9XvjmhqsWlWR_5bhqeBWa6Eo9kRgqdXU'  # for testing purpose only. Get yourself a key from google.
-TOXICITY_FILTER = 60 # filter texts with toxicity more than 60%
+PERSPECTIVE_API_KEY = os.getenv("PERSPECTIVE_API_KEY", "").strip()
+TOXIC_FILTER = os.getenv("PERSPECTIVE_ATTRIBUTE", "SEVERE_TOXICITY")
 API_ACTIVE = False
-TOXIC_FILTER = 'SEVERE_TOXICITY' # use TOXICITY to filter any TOXIC message
-try:
-    from googleapiclient import discovery
-    service = discovery.build('commentanalyzer', 'v1alpha1', developerKey=PERSPECTIVE_API_KEY)
-    API_ACTIVE = True
-except Exception, e:
-    logger.error("Unable to setup Prespective API. Error: %s", e)
+service = None
+
+if PERSPECTIVE_API_KEY:
+    try:
+        from googleapiclient import discovery
+
+        service = discovery.build(
+            "commentanalyzer",
+            "v1alpha1",
+            developerKey=PERSPECTIVE_API_KEY,
+            cache_discovery=False,
+        )
+        API_ACTIVE = True
+        logger.info("Perspective API moderation enabled")
+    except Exception as exc:
+        logger.warning("Perspective API disabled: %s", exc)
+else:
+    logger.info("Perspective API moderation disabled (no PERSPECTIVE_API_KEY)")
+
 
 def Toxicity(text):
-    if not API_ACTIVE:
-        logger.info("Perspective API not active. Message not filtered.")
+    if not API_ACTIVE or service is None:
         return 0
 
     try:
-        analyze_request = {'comment': { 'text': text}, 'requestedAttributes': {TOXIC_FILTER: {}} }
-        response = service.comments().analyze(body=analyze_request).execute()
-
-        toxicity = round(100 * float(response['attributeScores'][TOXIC_FILTER]['summaryScore']['value']))
-        
-        logger.info("Perspective API: Message filtered. Toxicity [%s]. Message [%s]", str(toxicity), text)
-
+        request = {
+            "comment": {"text": text},
+            "requestedAttributes": {TOXIC_FILTER: {}},
+        }
+        response = service.comments().analyze(body=request).execute()
+        toxicity = round(
+            100
+            * float(
+                response["attributeScores"][TOXIC_FILTER]["summaryScore"]["value"]
+            )
+        )
+        logger.debug("Perspective toxicity [%s]", toxicity)
         return toxicity
-
-    except Exception, e:
-        print 'Error,', e
-        logger.info("Unable to filter message via Perspective API. Message not filtered.")
-
-    return 0
+    except Exception as exc:
+        logger.warning("Perspective API request failed: %s", exc)
+        return 0
