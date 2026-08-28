@@ -1,190 +1,197 @@
-'''
-Timeline - An AS3 CPPS emulator, written by dote, in python. Extensively using Twisted modules and is event driven.
-Packets : PacketHandler - Handles the packets given and executed a defered request.
-'''
+"""Timeline packet parsing and dispatch."""
 
-from Timeline.Server.Constants import TIMELINE_LOGGER, PACKET_TYPE, PACKET_DELIMITER, AVAILABLE_XML_PACKET_TYPES
-from Timeline.Utils.Events import Event, PacketEventHandler, GeneralEvent
-
-from twisted.python.rebuild import rebuild
-from twisted.internet import threads, defer
-
-from lxml.etree import fromstring as parseXML
 from lxml import etree as XML
+from lxml.etree import fromstring as parseXML
+from twisted.internet import defer
 
-from collections import deque
-import logging
-import os
-import json
+from Timeline.Server.Constants import (
+    AVAILABLE_XML_PACKET_TYPES,
+    PACKET_DELIMITER,
+    PACKET_TYPE,
+)
+from Timeline.Utils.Events import PacketEventHandler
+
 
 class PacketHandler(object):
+    def __init__(self, penguin):
+        self.penguin = penguin
 
-	def __init__(self, penguin):
-		self.penguin = penguin
+    @staticmethod
+    def _text(data):
+        if isinstance(data, bytes):
+            return data.decode("utf-8", errors="replace")
+        return str(data)
 
-	def tryParseXML(self, xml_data):
-		try:
-			if not self.penguin.ReceivePacketEnabled:
-				return True
+    def tryParseXML(self, xml_data):
+        try:
+            if not self.penguin.ReceivePacketEnabled:
+                return True
 
-			XMLdata = parseXML(str(xml_data))
-			
-			t = XMLdata.get('t')
-			if t not in AVAILABLE_XML_PACKET_TYPES:
-				return None
+            text = self._text(xml_data)
+            xml_root = parseXML(text.encode("utf-8"))
+            packet_type = xml_root.get("t")
+            if packet_type not in AVAILABLE_XML_PACKET_TYPES:
+                return None
 
-			body = XMLdata.xpath('//body')
-			for i in range(len(body)):
-				b = body[i]
-				action = b.get("action") # Just to make sure `action` exists!
+            body = xml_root.xpath("//body")
+            for node in body:
+                node.get("action")
+            return [packet_type, body]
+        except Exception:
+            return None
 
-			return [t, body]
+    def tryParseXT(self, xt_data):
+        try:
+            xt_data = self._text(xt_data)
+            if (
+                not xt_data.startswith(PACKET_DELIMITER)
+                or not self.penguin.ReceivePacketEnabled
+            ):
+                return None
 
-		except:
-			return None
+            data = xt_data.split(PACKET_DELIMITER)
+            if len(data) < 6:
+                return None
+            if data[1] != PACKET_TYPE:
+                return None
 
-	def tryParseXT(self, xt_data):
-		try:
-			xt_data = str(xt_data)
-			if not xt_data.startswith(PACKET_DELIMITER) or not self.penguin.ReceivePacketEnabled:
-				return None
+            category = data[2]
+            handler = data[3]
+            client_data = data[5:-1]
 
-			data = xt_data.split(PACKET_DELIMITER)
-			# '', 'xt', 'cat', 'hand', 'room', ''
-			if len(data) < 6:
-				return None
+            if not self.penguin.canRecvPacket:
+                ignores = [(item[0], item[1]) for item in self.penguin.ignorableXTPackets]
+                packet = (category, handler)
+                if packet in ignores:
+                    entry = self.penguin.ignorableXTPackets[ignores.index(packet)]
+                    if entry[2] == 0:
+                        return True
+                else:
+                    return None
 
-			t = data[1]
-			if t != PACKET_TYPE:
-				return None
+            return [category, handler, client_data]
+        except Exception as exc:
+            self.penguin.log("error", "Unable to parse XT packet:", exc)
+            return None
 
-			category = data[2]
-			handler = data[3]
-			# TODO : Strict check room internal id.
-			internal_id = data[4]
+    def parsePacket(self, data):
+        data = self._text(data)
+        parsed = self.tryParseXML(data)
+        if not parsed and data.startswith("<"):
+            self.penguin.disconnect()
+            raise ValueError("[TE001] Malformed XML String")
+        if parsed:
+            return self.executePacket(parsed, 1)
 
-			client_data = data[5:-1]
+        parsed = self.tryParseXT(data)
+        if not parsed and data.startswith(PACKET_DELIMITER):
+            self.penguin.disconnect()
+            raise ValueError("[TE002] Malformed XT String")
+        if parsed:
+            return self.executePacket(parsed, 2)
 
-			if not self.penguin.canRecvPacket:
-				# Check for exceptions
-				ignores = [(i[0], i[1]) for i in self.penguin.ignorableXTPackets]
-				packet = (category, handler)
+        raise ValueError("[TE003] Unhandled Packet Type")
 
-				if packet in ignores:
-					pid = ignores.index(packet)
-					p_d = self.penguin.ignorableXTPackets[pid]
-					if p_d[2] == 0:
-						return True
+    def executePacket(self, data, packet_kind):
+        if packet_kind == 1:
+            if data is True:
+                return False
 
-				else:
-					return None
+            for body in data[1]:
+                action = body.get("action")
+                event = "{2}:{3}-></{0}-{1}>".format(
+                    data[0], action, self.penguin.engine.type, self.penguin.Protocol
+                )
+                rule = PacketEventHandler.FetchRule(
+                    "xml",
+                    action,
+                    data[0],
+                    self.penguin.engine.type,
+                    self.penguin.Protocol,
+                )
+                if rule is not None:
+                    args, kwargs = rule(body)
+                else:
+                    args, kwargs = [], {}
 
-			return [category, handler, client_data]
+                args = [self.penguin] + args
+                PacketEventHandler.call(
+                    event,
+                    args=(self.penguin, body),
+                    rules_a=args,
+                    rules_kwarg=kwargs,
+                )
 
-		except Exception, e:
-			print e
-			return None
+        elif packet_kind == 2:
+            if data is True:
+                return False
 
-	def parsePacket(self, data):
-		_data = self.tryParseXML(data)
-		if not _data and data.startswith("<"):
-			self.penguin.disconnect()
-			raise Exception("[TE001] Malformed XML String")
+            event = "{2}:{3}->%{0}%{1}%".format(
+                data[0], data[1], self.penguin.engine.type, self.penguin.Protocol
+            )
+            rule = PacketEventHandler.FetchRule(
+                "xt",
+                data[0],
+                data[1],
+                self.penguin.engine.type,
+                self.penguin.Protocol,
+            )
+            if rule is not None:
+                args, kwargs = rule(data)
+            else:
+                args, kwargs = [], {}
 
-		if _data:
-			return self.executePacket(_data, 1)
+            args = [self.penguin] + args
+            PacketEventHandler.call(
+                event,
+                args=[self.penguin, data],
+                rules_a=args,
+                rules_kwarg=kwargs,
+            )
+        elif packet_kind == 3:
+            return False
 
-		_data = self.tryParseXT(data)
-		if not _data and data.startswith(PACKET_DELIMITER):
-			self.penguin.disconnect()
-			raise Exception("[TE002] Malformed XT String")
+        return True
 
-		if _data:
-			return self.executePacket(_data, 2)
-		
-		raise Exception("[TE003] Unhandled Packet Type")
+    def handlePacketReceived(self, line):
+        line = self._text(line)
+        if line == "<policy-file-request/>":
+            return defer.maybeDeferred(self.penguin.handleCrossDomainPolicy)
+        return defer.maybeDeferred(self.parsePacket, line)
 
-		# JSON NOT HANDLED ATM
+    def buildXML(self, node):
+        root_name = next(iter(node))
+        root = XML.Element(str(root_name))
+        self.buildXMLNodes(root, node[root_name])
+        return XML.tostring(root, encoding="unicode")
 
-	'''
-	@param[type] : 1 -> XML, 2 -> XT, 3 -> JSON
-	'''
-	def executePacket(self, data, type):
-		if type == 1:
-			if data == True:
-				return False
+    def buildXMLNodes(self, element, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            element.text = XML.CDATA("" if node is None else str(node))
+            return
 
-			for i in range(len(data[1])):
-				body = data[1][i]
-				action = body.get("action")
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key = str(key)
+                if isinstance(value, dict):
+                    child = XML.Element(key)
+                    self.buildXMLNodes(child, value)
+                    element.append(child)
+                elif isinstance(value, list):
+                    child_name = key[:-1] if key.endswith("s") else key
+                    for item in value:
+                        child = XML.Element(child_name)
+                        self.buildXMLNodes(child, item)
+                        element.append(child)
+                else:
+                    element.set(key, "" if value is None else str(value))
+            return
 
-				event = "{2}:{3}-></{0}-{1}>".format(data[0], action, self.penguin.engine.type, self.penguin.Protocol)
-				RuleHandler = PacketEventHandler.FetchRule('xml', action, data[0], self.penguin.engine.type, self.penguin.Protocol)
-				
-				if RuleHandler != None:
-					args, kwargs = RuleHandler(body)
-				else:
-					args, kwargs = [[], {}]
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                child = XML.Element("item")
+                self.buildXMLNodes(child, item)
+                element.append(child)
+            return
 
-				args = [self.penguin] + args
-
-				PacketEventHandler.call(event, args = (self.penguin, body), rules_a = args, rules_kwarg = kwargs)
-
-		elif type == 2:
-			if data == True:
-				return False
-
-			event = "{2}:{3}->%{0}%{1}%".format(data[0], data[1], self.penguin.engine.type, self.penguin.Protocol)
-			RuleHandler = PacketEventHandler.FetchRule('xt', data[0], data[1], self.penguin.engine.type, self.penguin.Protocol)
-			if RuleHandler != None:
-				args, kwargs = RuleHandler(data)
-			else:
-				args = []
-				kwargs = {}
-
-			args = [self.penguin] + args
-
-			PacketEventHandler.call(event, args = [self.penguin, data], rules_a = args, rules_kwarg = kwargs)
-
-		elif type == 3:
-			return False
-
-		return True
-
-	def handlePacketReceived(self, line):
-		if line == "<policy-file-request/>":
-			deferedHandler = defer.maybeDeferred(self.penguin.handleCrossDomainPolicy)
-		else:
-			deferedHandler = defer.maybeDeferred(self.parsePacket, line)
-		
-		return deferedHandler
-
-	def buildXML(self, node):
-		root = XML.Element(node.keys()[0])
-		self.buildXMLNodes(root, node[node.keys()[0]])
-		return XML.tostring(root)
-
-	def buildXMLNodes(self, element, node):
-		if type(node) is str or type(node) is int or type(node) is bool:
-			node = str(node)
-			element.text = XML.CDATA(node)
-		else:
-			for k, v in node.iteritems():
-				if type(v) is dict:
-					# serialize the child dictionary
-					child = XML.Element(k)
-					self.buildXMLNodes(child, v)
-					element.append(child)
-				elif type(v) is list:
-					if k[-1] == 's':
-						name = k[:-1]
-					else:
-						name = k
-
-					for item in v:
-						child = XML.Element(name)
-						self.buildXMLNodes(child, item)
-						element.append(child)
-				else:
-					# add attributes to the current element
-					element.set(k, unicode(v))
+        element.text = XML.CDATA(str(node))
