@@ -32,6 +32,38 @@ services:
       timeout: 3s
       retries: 20
 
+  timeline:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TIMELINE_BIND_HOST: 0.0.0.0
+      TIMELINE_LOGIN_PORT: ${TIMELINE_LOGIN_PORT:-6112}
+      TIMELINE_WORLD_PORT: ${TIMELINE_WORLD_PORT:-9875}
+      TIMELINE_WORLD_NAME: ${TIMELINE_WORLD_NAME:-Gravity}
+      TIMELINE_WORLD_ID: ${TIMELINE_WORLD_ID:-100}
+      TIMELINE_WORLD_MAX: ${TIMELINE_WORLD_MAX:-300}
+      TIMELINE_HOT_RELOAD: "0"
+      TIMELINE_LEGACY_IMPORT_COMPAT: "1"
+      MYSQL_HOST: mariadb
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-timeline}
+      MYSQL_USER: ${MYSQL_USER:-timeline}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-timeline}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-0}
+      PERSPECTIVE_API_KEY: ${PERSPECTIVE_API_KEY:-}
+      FIREBASE_CREDENTIAL_PATH: ${FIREBASE_CREDENTIAL_PATH:-}
+    ports:
+      - "${TIMELINE_LOGIN_PORT:-6112}:${TIMELINE_LOGIN_PORT:-6112}"
+      - "${TIMELINE_WORLD_PORT:-9875}:${TIMELINE_WORLD_PORT:-9875}"
+
 volumes:
   mariadb_data:
   redis_data:
