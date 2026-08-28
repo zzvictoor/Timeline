@@ -1,0 +1,41 @@
+name: Python 3 migration CI
+
+on:
+  push:
+    branches:
+      - python3-modernization
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Check Python 3 source compatibility
+        run: python scripts/check_python3_sources.py
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-libmysqlclient-dev pkg-config
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
+
+      - name: Import modernized core
+        run: |
+          python -c "import Timeline; import Timeline.Database; import Timeline.Server.Packets; import Timeline.Utils.Cryptography"
+
+      - name: Validate Compose file
+        run: docker compose config
+
+      - name: Build Timeline image
+        run: docker compose build timeline
