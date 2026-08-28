@@ -13,8 +13,10 @@ MODERNIZED = {
     "Timeline/compat.py",
     "Timeline/Database/__init__.py",
     "Timeline/Database/DB.py",
+    "Timeline/Handlers/Games/CardJitsuFire/CardJitsu.py",
     "Timeline/Handlers/Login.py",
     "Timeline/Handlers/Messages.py",
+    "Timeline/Handlers/Stamps.py",
     "Timeline/Server/Constants.py",
     "Timeline/Server/Engine.py",
     "Timeline/Server/Packets.py",
@@ -22,6 +24,7 @@ MODERNIZED = {
     "Timeline/Server/Redis.py",
     "Timeline/Utils/Cryptography.py",
     "Timeline/Utils/Modules.py",
+    "Timeline/Utils/Refresh/Handlers.py",
     "Start.py",
 }
 
