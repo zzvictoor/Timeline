@@ -1,0 +1,13 @@
+Twisted==26.4.0
+mysqlclient==2.2.8
+txredisapi==1.4.11
+watchdog>=4.0,<7.0
+bcrypt>=4.1,<6.0
+lxml>=5.0,<7.0
+numpy>=1.26,<3.0
+colorlog>=6.8,<7.0
+six>=1.16,<2.0
+python-dotenv>=1.0,<2.0
+firebase-admin>=6.0,<8.0
+google-api-python-client>=2.0,<3.0
+twistar @ https://github.com/bmuller/twistar/archive/1eb46ff2577473e0a26932ee57473e26203a3db2.zip
