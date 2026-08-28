@@ -25,8 +25,10 @@ _MODERNIZED_MODULES = {
     "Timeline.compat",
     "Timeline.Database",
     "Timeline.Database.DB",
+    "Timeline.Handlers.Games.CardJitsuFire.CardJitsu",
     "Timeline.Handlers.Login",
     "Timeline.Handlers.Messages",
+    "Timeline.Handlers.Stamps",
     "Timeline.Server.Constants",
     "Timeline.Server.Engine",
     "Timeline.Server.Packets",
@@ -34,6 +36,7 @@ _MODERNIZED_MODULES = {
     "Timeline.Server.Redis",
     "Timeline.Utils.Cryptography",
     "Timeline.Utils.Modules",
+    "Timeline.Utils.Refresh.Handlers",
 }
 
 _TOOL = None
