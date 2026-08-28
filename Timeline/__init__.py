@@ -1,5 +1,12 @@
 """Timeline base value objects."""
 
+from Timeline.compat import install_legacy_importer
+
+# Install this before importing historical submodules. Modernized core modules
+# bypass the compatibility loader; remaining Python 2-era handlers are converted
+# in memory while the direct source port is being completed.
+install_legacy_importer()
+
 from math import ceil
 import time
 
@@ -55,7 +62,6 @@ class Nickname(str):
         return self.n
 
     def _update(self, nickname):
-        """Queue the DB update without turning a property setter into a generator."""
         deferred = self.c.db_nicknameUpdate(nickname)
 
         def apply_if_saved(saved):
