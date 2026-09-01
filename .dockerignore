@@ -1,0 +1,10 @@
+.git
+.github
+__pycache__
+*.py[cod]
+*.whl
+*.log
+.env
+.venv
+venv
+logs/*.log

@@ -1,242 +1,222 @@
-# -*-coding: utf-8-*-
-'''
-Timeline - An AS3 CPPS emulator, written by dote, in python. Extensively using Twisted modules and is event driven.
-Below shows examples of starting a World-Server and Login-Server
-'''
+# -*- coding: utf-8 -*-
+"""Timeline server bootstrap.
 
-'''
-Basic imports : These are mandatory to import before starting any server.
-'''
+Modernized for Python 3 while preserving the original AS2/AS3 protocol and
+handler/plugin architecture.
+"""
+
+import gc
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import os
+import signal
+import sys
+
+from dotenv import load_dotenv
+from twisted.internet import reactor
+from twisted.python import log
+
 import Timeline
-from Timeline.Server import Constants
+from Timeline import Handlers, PacketHandler, Plugins
 from Timeline.Database import DBManagement as DBM
+from Timeline.Server import Constants
 from Timeline.Server.Engine import Engine
 from Timeline.Server.Penguin import Penguin
 from Timeline.Utils.Events import GeneralEvent
 from Timeline.Utils.Modules import ModuleHandler
-from Timeline.Utils.Plugins import loadPlugins, loadPluginObjects, getPlugins, PLUGINS_LOADED
+from Timeline.Utils.Plugins import (
+    PLUGINS_LOADED,
+    getPlugins,
+    loadPluginObjects,
+    loadPlugins,
+)
 
-from Timeline import Handlers
-from Timeline import PacketHandler
-from Timeline import Plugins
+load_dotenv()
 
-from twisted.internet import reactor
-from twisted.internet.task import LoopingCall
-from twisted.internet.defer import inlineCallbacks, returnValue
-from twisted.python import log
-
-import logging
-from logging.handlers import TimedRotatingFileHandler
-import os, sys, signal
-import subprocess
-import gc
-
-'''
-global -> TIMELINE_LOGGER : Defines the name of logging class used globally!
-'''
-Constants.TIMELINE_LOGGER = 'Timeline'
-
-'''
-InitiateLogger : This is function initiates the logger accessed all along Timeline.
-@dependencies : logging
-@param[name]->optional : Defines the name of the logger you are going to use all along, default - Timeline
-'''
+Constants.TIMELINE_LOGGER = "Timeline"
 
 
-def InitiateColorLogger(name='Timeline'):
+def env_int(name, default):
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def initiate_color_logger(name="Timeline"):
     from colorlog import ColoredFormatter
 
     Constants.TIMELINE_LOGGER = name
-    Timeline_logger = logging.getLogger(name)
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
 
-    Timeline_stream = logging.StreamHandler()
+    # Avoid duplicate handlers when hot-reloading/importing Start.py.
+    if logger.handlers:
+        return logger
 
-    LogFormat = "  %(reset)s%(log_color)s%(levelname)-8s%(reset)s | %(log_color)s%(message)s"
-    Timeline_stream.setFormatter(ColoredFormatter(LogFormat, log_colors={
-        'DEBUG': 'white',
-        'INFO': 'cyan',
-        'WARNING': 'yellow',
-        'ERROR': 'red',
-        'CRITICAL': 'black,bg_red',
-    }))
+    stream = logging.StreamHandler()
+    fmt = "  %(reset)s%(log_color)s%(levelname)-8s%(reset)s | %(log_color)s%(message)s"
+    stream.setFormatter(
+        ColoredFormatter(
+            fmt,
+            log_colors={
+                "DEBUG": "white",
+                "INFO": "cyan",
+                "WARNING": "yellow",
+                "ERROR": "red",
+                "CRITICAL": "black,bg_red",
+            },
+        )
+    )
+    logger.addHandler(stream)
 
-    Timeline_logger.addHandler(Timeline_stream)
-
-    Timeline_logger.setLevel(logging.DEBUG)
-    handler = TimedRotatingFileHandler('./logs/TimelineLogs.log', when="d", interval=1)
-    Timeline_logger.addHandler(handler)
-
-    Timeline_logger.debug("Timeline Logger::Initiated")
-
-    return Timeline_logger
+    os.makedirs("./logs", exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        "./logs/TimelineLogs.log", when="d", interval=1, encoding="utf-8"
+    )
+    logger.addHandler(file_handler)
+    logger.debug("Timeline Logger::Initiated")
+    return logger
 
 
-def InitiateLogger(name="Timeline"):
+def initiate_logger(name="Timeline"):
     Constants.TIMELINE_LOGGER = name
-    Timeline_logger = logging.getLogger(name)
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    if logger.handlers:
+        return logger
 
-    Timeline_stream = logging.StreamHandler()
-    LogFormat = logging.Formatter("%(asctime)s [%(levelname)s]\t : %(message)s", "%H:%M")
-    Timeline_stream.setFormatter(LogFormat)
-    Timeline_logger.addHandler(Timeline_stream)
-    Timeline_logger.setLevel(logging.DEBUG)
+    stream = logging.StreamHandler()
+    stream.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s]\t : %(message)s", "%H:%M")
+    )
+    logger.addHandler(stream)
 
-    handler = TimedRotatingFileHandler('./logs/TimelineLogs.log', when="d", interval=1)
-    Timeline_logger.addHandler(handler)
-
-    Timeline_logger.debug("Timeline Logger::Initiated")
-
-    return Timeline_logger
-
-
-def HotLoadModule(module):
-    Handler = ModuleHandler(module)
-    return Handler.startLoadingModules()
+    os.makedirs("./logs", exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        "./logs/TimelineLogs.log", when="d", interval=1, encoding="utf-8"
+    )
+    logger.addHandler(file_handler)
+    logger.debug("Timeline Logger::Initiated")
+    return logger
 
 
-def LoadPlugins(module):
+def hot_load_module(module):
+    return ModuleHandler(module).startLoadingModules()
+
+
+def load_plugins(module):
     loadPlugins(module)
-    plugins_loaded = map(str, PLUGINS_LOADED)
-    TimelineLogger.info("Loaded %s Plugin(s) : %s", len(plugins_loaded), ', '.join(map(lambda x: x.name, getPlugins())))
-
+    loaded = list(PLUGINS_LOADED)
+    TimelineLogger.info(
+        "Loaded %s Plugin(s) : %s",
+        len(loaded),
+        ", ".join(plugin.name for plugin in getPlugins()),
+    )
     loadPluginObjects()
 
 
-print """
+print(
+    r"""
      _______
     |__   __|
-       | |  #   _ _     __  ||  #  __     __  py 
+       | |  #   _ _     __  ||  #  __     __  py3
        | | | | | | |  / //| || || |  |  / //|
        | | | | | | | |_||/  || || |  | |_||/
-       |_| |_| | | |  \\___  || || |  |  \\__
+       |_| |_| | | |  \___  || || |  |  \__
     ----------------------------------------------
-    > AS3 + AS2 CPPS Emulator. Written in Python
-    > Developer : Dote
-    > Version   : 7.7 production stable (AS2 + AS3) [Cross-compatible]
-    > Updates   : [+] CardJitsu Water and Water ninja progress
-
-                  [&] Disney' Friends list + Friends Server Jumping
-                      * You need the Disney Friend extension utility
-                        (disney-friends.swf dependency) to bring list back to life
-                      * You need pre-existing Server Jumping utility (jumpline.swf)
-                        read below for further info on it, to use server jumping feature
-
-                  [&] Pre activation checks [Activation mandatory now]
-                      
-                  [&] AS2 + AS3 Cross Compatibility on single server
-                      * You can now create a server that accepts both AS2,
-                        and AS3 Client both at the same time :~)
-                        No separate AS2 and AS3 servers anymore!!    
-                  [&] Server Jumping
-                      * Please follow https://times-0.github.com/docs/mediaserver.html#ServerJump
-                        and setup client dependency (jumpline.swf) to get this working
-                  [&] Firebase, autologin Integration 
-                      [Using Google' Firebase System]
-                      * Please follow docs at 
-                        https://times-0.github.io, and
-                        setup Firebase credentials before
-                        proceeding, only if you want to activate
-                        this feature.
-                      * Usage is optional, but recommended
-
-                  [&] Message Filter - Based on Toxicity
-                      [Using Google' Perspective API]
-                      * Please get yourself whitelisted from
-                        Google and get a API Key.
-                        The key provided is only for
-                        testing, development and educational
-                        purpose.
-
-                  [!] nx-cache : First time user login and first time tutorials
-                        ! Coming soon, Patience :~)
-                        & Pinned intel
-                  [-] Bugs and Glitches
-    _______________________________________________
-    * Make sure to download the new Register (Register-CP)
-    script, with CP Styled register and activation.
-    * Make sure to download the new `Avatar.py`, from Avatar branch, 
-    so that your avatar supports the new `line` based database structure.
+    > AS3 + AS2 CPPS Emulator
+    > Timeline 7.7 compatibility port for Python 3
 """
+)
 
-# Example of starting the logger!
-TimelineLogger = InitiateColorLogger()  # InitiateLogger()
+TimelineLogger = initiate_color_logger()
 
-# Checking database, databas details once set cannot be change during runtime
-DBMS = DBM(user = "root", passd = "", db = "timeline")
+DBMS = DBM(
+    user=os.getenv("MYSQL_USER", "timeline"),
+    passd=os.getenv("MYSQL_PASSWORD", "timeline"),
+    db=os.getenv("MYSQL_DATABASE", "timeline"),
+    host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+    port=env_int("MYSQL_PORT", 3306),
+)
 
 if not DBMS.conn:
-    sys.exit()
-
-if not DBMS.db_data[1].endswith('line'):
-    TimelineLogger.critical("Unsupported Data Structure. Timeline >= v7, explicitly forces the naming convention,\n"
-                            "\t\t\t for table name to end with 'line' (eg: timeline), so as to denote the new db-structure.\n"
-                            "\t\t\t Please update your Table structure to the new one, and follow the new naming convention")
-
-    TimelineLogger.warn("You can run the Python File: DatabasePort.py,\n\t\t\t to convert all your old data to new one."
-                        "\n\t\t\t And also to create db of new structure, if it doesn't exist already.")
-
-    TimelineLogger.info("Exiting Timeline. Restart timeline to continue.")
-    TimelineLogger.info("If you has any issues porting your old db, run the python file in a separate console, "
-                        "or contact developer for support.")
-
     sys.exit(1)
 
-# Catch unhandled deferred errors
+if not DBMS.db_data[1].endswith("line"):
+    TimelineLogger.critical(
+        "Unsupported data structure: Timeline >= v7 requires the database name "
+        "to end with 'line' (for example: timeline)."
+    )
+    TimelineLogger.info("Exiting Timeline.")
+    sys.exit(1)
+
+# Route unhandled Twisted Deferred errors through Timeline's logger.
 TEObserver = log.PythonLoggingObserver(loggerName=Constants.TIMELINE_LOGGER)
 TEObserver.start()
 
-SERVERS = list()
+SERVERS = []
 
 
-@inlineCallbacks
 def safeDestroyClients():
-    TimelineLogger.warn(
-        "Timeline is safely shutting down, this can take some time. Please don't interrupt or close the server, that might affect users experience on next login.")
-
+    TimelineLogger.warning("Timeline is shutting down safely...")
+    deferreds = []
     for engine in SERVERS:
-        yield engine.connectionLost('Unknown')
-
-    TimelineLogger.debug('Viola!')
-    # reactor.callFromThread(reactor.stop)
+        deferreds.append(engine.connectionLost("Server shutdown"))
+    return deferreds
 
 
-def onExitSignal(*a):
-    print 'Closing Timeline?'
+def onExitSignal(*_args):
+    TimelineLogger.info("Closing Timeline...")
     if not reactor.running:
-        os._exit(1)
-
+        return
     reactor.callFromThread(reactor.stop)
 
 
-for sig in (signal.SIGABRT, signal.SIGILL, signal.SIGINT, signal.SIGSEGV, signal.SIGTERM):
-    signal.signal(sig, onExitSignal)
+for sig_name in ("SIGABRT", "SIGINT", "SIGTERM"):
+    sig = getattr(signal, sig_name, None)
+    if sig is not None:
+        try:
+            signal.signal(sig, onExitSignal)
+        except (OSError, ValueError):
+            pass
 
 
 def main():
     global SERVERS
 
-    # Example of initiating server to listen to given endpoint.
-    '''
-    LOGIN_SERVER => Initiates Engine to be a Login server
-    WORLD_SERVER => Initiates Engine to be a World Server
+    bind_host = os.getenv("TIMELINE_BIND_HOST", "0.0.0.0")
+    login_port = env_int("TIMELINE_LOGIN_PORT", 6112)
+    world_port = env_int("TIMELINE_WORLD_PORT", 9875)
+    world_id = env_int("TIMELINE_WORLD_ID", 100)
+    world_max = env_int("TIMELINE_WORLD_MAX", 300)
+    world_name = os.getenv("TIMELINE_WORLD_NAME", "Gravity")
 
-    The type of server *must* be sent to Engine as a parameter!
-    '''
-    # CROSS_PROTOCOL = Accepts both AS2 + AS3 under one roof
+    login_server = Engine(
+        Penguin,
+        Constants.LOGIN_SERVER,
+        1,
+        "Login",
+        server_protocol=Constants.CROSS_PROTOCOL,
+    )
+    world_server = Engine(
+        Penguin,
+        Constants.WORLD_SERVER,
+        world_id,
+        world_name,
+        _max=world_max,
+        server_protocol=Constants.CROSS_PROTOCOL,
+    )
 
-    LoginServer = Engine(Penguin, Constants.LOGIN_SERVER, 1, "Login", server_protocol=Constants.CROSS_PROTOCOL)
-    Gravity = Engine(Penguin, Constants.WORLD_SERVER, 100, "Gravity", server_protocol=Constants.CROSS_PROTOCOL)
-
-    LoginServer.run('127.0.0.1', 6112)
-    Gravity.run('127.0.0.1', 9875)
-
-    SERVERS += [LoginServer, Gravity]
+    login_server.run(bind_host, login_port)
+    world_server.run(bind_host, world_port)
+    SERVERS = [login_server, world_server]
 
 
-LoadPlugins(Plugins)
-
-HotLoadModule(Handlers).addCallback(lambda x: HotLoadModule(PacketHandler).addCallback(lambda x: main()))
-
-reactor.addSystemEventTrigger('before', 'shutdown', safeDestroyClients)
-
+load_plugins(Plugins)
+hot_load_module(Handlers).addCallback(
+    lambda _x: hot_load_module(PacketHandler).addCallback(lambda _y: main())
+)
+reactor.addSystemEventTrigger("before", "shutdown", safeDestroyClients)
 reactor.run()
+gc.collect()

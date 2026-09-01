@@ -1,81 +1,84 @@
-"""
-Timeline's memory based redis databases' handler
-"""
+"""Timeline Redis-backed runtime state."""
 
-from Timeline.Server.Constants import LOGIN_SERVER, WORLD_SERVER
-
-
+import json
+import os
 
 import txredisapi as redis
-import json
+from twisted.internet.defer import inlineCallbacks, returnValue
 
-from twisted.internet.defer import Deferred, inlineCallbacks, returnValue
+from Timeline.Server.Constants import LOGIN_SERVER, WORLD_SERVER
 
 
 class Redis(object):
     def __init__(self, engine):
         self.engine = engine
         self.server = None
-        
-        self.redisConnectionDefer = redis.ConnectionPool(host = '127.0.0.1', reconnect = True)
+
+        host = os.getenv("REDIS_HOST", "127.0.0.1")
+        port = int(os.getenv("REDIS_PORT", "6379"))
+        dbid = int(os.getenv("REDIS_DB", "0"))
+
+        self.redisConnectionDefer = redis.ConnectionPool(
+            host=host,
+            port=port,
+            dbid=dbid,
+            reconnect=True,
+            charset="utf-8",
+        )
         self.redisConnectionDefer.addCallback(self.initPenguins)
-        
+
     @inlineCallbacks
     def initPenguins(self, pool):
         self.server = pool
-        
-        self.log("info", "Setting redis data...")
+        self.log("info", "Setting Redis data...")
 
         if self.engine.type == WORLD_SERVER:
             name = "server:{0}".format(self.engine.id)
-            yield self.server.hmset(name, {
-                'name' : self.engine.name,
-                'max' : self.engine.maximum,
-                'population' : 0
-                
-            })
-            
+            yield self.server.hmset(
+                name,
+                {
+                    "name": self.engine.name,
+                    "max": self.engine.maximum,
+                    "population": 0,
+                },
+            )
             yield self.server.sadd("servers", self.engine.id)
-        
-        
-        self.log("info", "Setup memcache data successful!")
-    
-    
-    @inlineCallbacks     
+
+        self.log("info", "Redis runtime state ready")
+        returnValue(pool)
+
+    @inlineCallbacks
     def getWorldServers(self):
         servers = yield self.server.smembers("servers")
-        s = dict({})
-        smu = dict()
+        data = {}
+        users = {}
 
         for sid in servers:
-            s[sid] = yield self.server.hgetall("server:{0}".format(sid))
-            smu[sid] = set((yield self.server.smembers("users:{}".format(sid))))
-        
-        returnValue([s, smu])
+            data[sid] = yield self.server.hgetall("server:{0}".format(sid))
+            users[sid] = set(
+                (yield self.server.smembers("users:{}".format(sid)))
+            )
+
+        returnValue([data, users])
 
     @inlineCallbacks
     def isPenguinLoggedIn(self, peng_id):
-        x = yield self.server.hgetall("online:{}".format(peng_id))
-        print x
-        exists = yield self.server.exists('online:{0}'.format(peng_id))
-
-        returnValue(exists)
+        exists = yield self.server.exists("online:{0}".format(peng_id))
+        returnValue(bool(exists))
 
     @inlineCallbacks
     def isPenguinOnlineOnServer(self, peng, server):
-        if not self.isPenguinLoggedIn(peng):
+        logged_in = yield self.isPenguinLoggedIn(peng)
+        if not logged_in:
             returnValue(False)
 
-        online = yield self.server.hgetall('online:{}'.format(peng))
-        returnValue(str(online['server']) == str(server))
+        online = yield self.server.hgetall("online:{}".format(peng))
+        returnValue(str(online["server"]) == str(server))
 
     @inlineCallbacks
     def getPlayerKey(self, pid):
-        key = yield self.server.get('conf:{}'.format(pid))
-
+        key = yield self.server.get("conf:{}".format(pid))
         returnValue(key)
-        
-    def log(self, k, *a):
-        msg = ["(Redis)"] + list(a)
-        self.engine.log(k, *msg)
 
+    def log(self, level, *args):
+        self.engine.log(level, "(Redis)", *args)
